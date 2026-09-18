@@ -34,6 +34,15 @@ class ModalProvider(VideoProvider):
         )
         return call.object_id
 
+
+    async def submit_stitch(self, ad_id: str, assets: list[str]) -> str:
+        function = modal.Function.from_name(self.APP_NAME, "stitch_clips")
+        call = function.spawn(ad_id, assets)
+        return call.object_id
+
+    async def stitch_status(self, provider_job_id: str) -> dict:
+        return await self.status(provider_job_id)
+
     async def status(self, provider_job_id: str) -> dict:
         call = modal.FunctionCall.from_id(provider_job_id)
         try:
