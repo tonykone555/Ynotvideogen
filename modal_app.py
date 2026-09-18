@@ -312,6 +312,98 @@ def render_a100(workflow: dict, metadata: dict | None = None) -> dict:
         proc.terminate()
 
 
+@app.function(
+    image=image,
+    volumes={"/outputs": outputs},
+    timeout=60 * 15,
+    max_containers=2,
+)
+def stitch_clips(ad_id: str, assets: list[str]) -> dict:
+    """Normalize generated clips to mobile portrait and concatenate them into one MP4."""
+    if len(assets) < 2:
+        raise ValueError("At least two generated clips are required for stitching.")
+
+    outputs.reload()
+    root = Path("/outputs").resolve()
+    safe_assets: list[Path] = []
+    for raw in assets:
+        path = Path(raw).resolve()
+        if root not in path.parents:
+            raise ValueError(f"Asset must be inside /outputs: {raw!r}")
+        if not path.exists() or not path.is_file():
+            raise FileNotFoundError(f"Generated clip was not found: {raw}")
+        safe_assets.append(path)
+
+    work = Path("/tmp") / f"ynot-stitch-{ad_id}"
+    work.mkdir(parents=True, exist_ok=True)
+    normalized: list[Path] = []
+
+    for index, source in enumerate(safe_assets):
+        target = work / f"shot-{index:02d}.mp4"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(source),
+                "-an",
+                "-vf",
+                "scale=1080:1920:force_original_aspect_ratio=decrease,"
+                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "medium",
+                "-crf",
+                "18",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                str(target),
+            ],
+            check=True,
+        )
+        normalized.append(target)
+
+    concat_file = work / "concat.txt"
+    concat_file.write_text(
+        "".join(f"file '{path.as_posix()}'\n" for path in normalized),
+        encoding="utf-8",
+    )
+
+    final_dir = Path("/outputs/YNOT/final")
+    final_dir.mkdir(parents=True, exist_ok=True)
+    final = final_dir / f"{ad_id}.mp4"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(concat_file),
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(final),
+        ],
+        check=True,
+    )
+    outputs.commit()
+    return {
+        "status": "generated",
+        "assets": [str(final)],
+        "width": 1080,
+        "height": 1920,
+        "fps": 30,
+        "clip_count": len(safe_assets),
+    }
+
+
 @app.function(image=image, gpu="L4", timeout=120)
 def gpu_probe() -> dict:
     """Cheap deployment smoke test before downloading any large model."""
