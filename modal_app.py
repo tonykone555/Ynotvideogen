@@ -255,6 +255,45 @@ def gpu_probe() -> dict:
     return {"ok": True, "gpu": name, "memory": memory}
 
 
+@app.function(image=image, gpu="L4", timeout=180)
+def comfy_probe() -> dict:
+    """Start the pinned worker image and report whether required workflow nodes exist."""
+    proc = _start_comfy()
+    try:
+        object_info = _get_json("/object_info")
+        required = [
+            "LoadImage",
+            "UNETLoader",
+            "CLIPLoader",
+            "VAELoader",
+            "CLIPTextEncode",
+            "WanImageToVideo",
+            "KSamplerAdvanced",
+            "VAEDecode",
+            "CreateVideo",
+            "SaveVideo",
+            "CheckpointLoaderSimple",
+            "LTXVImgToVideo",
+            "KSampler",
+            "Kandinsky5TextEncoderLoader",
+            "Kandinsky5UNETLoader",
+            "Kandinsky5TextEncode",
+            "Kandinsky5ImageToVideo",
+        ]
+        available = [name for name in required if name in object_info]
+        missing = [name for name in required if name not in object_info]
+        return {
+            "ok": not missing,
+            "required_count": len(required),
+            "available": available,
+            "missing": missing,
+            "comfy_node_count": len(object_info),
+        }
+    finally:
+        proc.terminate()
+
+
 @app.local_entrypoint()
 def smoke():
     print(gpu_probe.remote())
+    print(comfy_probe.remote())
