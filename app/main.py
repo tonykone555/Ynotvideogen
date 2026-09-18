@@ -1,6 +1,10 @@
-from uuid import UUID
+import os
+from pathlib import Path
+from uuid import UUID, uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.benchmarks import BASELINE_MATRIX, build_benchmark_requests
 from app.director import plan_generation
@@ -12,7 +16,55 @@ from app.storyboard import shot_to_generation
 from app.workflows.compiler import compile_workflow
 from app.workflows.registry import MODELS
 
-app = FastAPI(title="YNOT Video Gen", version="0.5.0")
+app = FastAPI(title="YNOT Video Gen", version="0.6.0")
+
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv("YNOT_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+UPLOAD_DIR = Path(os.getenv("YNOT_UPLOAD_DIR", "/tmp/ynot-video-gen/uploads"))
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+
+
+@app.post("/v1/uploads")
+async def upload_reference(request: Request, file: UploadFile = File(...)):
+    """Upload a reference image and return an HTTP URL Modal can fetch."""
+    content_type = (file.content_type or "").lower()
+    allowed = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+    }
+    if content_type not in allowed:
+        raise HTTPException(status_code=415, detail="Upload a JPG, PNG, or WebP image.")
+
+    data = await file.read(25 * 1024 * 1024 + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="Image upload was empty.")
+    if len(data) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Image upload exceeds 25 MB.")
+
+    filename = f"{uuid4().hex}{allowed[content_type]}"
+    target = UPLOAD_DIR / filename
+    target.write_bytes(data)
+
+    public_base = os.getenv("YNOT_PUBLIC_BASE_URL", "").rstrip("/")
+    if public_base:
+        url = f"{public_base}/uploads/{filename}"
+    else:
+        url = str(request.base_url).rstrip("/") + f"/uploads/{filename}"
+
+    return {"url": url, "filename": filename, "content_type": content_type, "bytes": len(data)}
 
 
 @app.get("/health")
