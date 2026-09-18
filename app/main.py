@@ -4,19 +4,117 @@ from fastapi import FastAPI, HTTPException
 
 from app.benchmarks import BASELINE_MATRIX, build_benchmark_requests
 from app.director import plan_generation
-from app.models import GenerationJob, GenerationRequest, ProviderName
+from app.models import AdRenderJob, AdRequest, GenerationJob, GenerationRequest, ProviderName
+from app.planner import plan_ad
 from app.providers.modal import ModalProvider
-from app.store import jobs
+from app.store import ad_jobs, jobs
+from app.storyboard import shot_to_generation
 from app.workflows.compiler import compile_workflow
 from app.workflows.registry import MODELS
 
-app = FastAPI(title="YNOT Video Gen", version="0.3.0")
+app = FastAPI(title="YNOT Video Gen", version="0.4.0")
 
 
 @app.get("/health")
 async def health():
     return {"ok": True, "service": "ynot-video-gen"}
 
+
+
+@app.post("/v1/ads/plan")
+async def create_ad_plan(request: AdRequest):
+    """Create a mobile-first 4-shot portrait storyboard without rendering."""
+    return plan_ad(request)
+
+
+@app.post("/v1/ads/generate", response_model=AdRenderJob)
+async def generate_ad(request: AdRequest):
+    """Plan and asynchronously submit four linked portrait shots to the current provider."""
+    ad_job = AdRenderJob(request=request, plan=plan_ad(request), status="queued")
+    provider = ModalProvider()
+
+    for shot in ad_job.plan.shots:
+        generation = shot_to_generation(request, shot)
+        jobs[generation.id] = generation
+        shot.generation_job_id = generation.id
+        try:
+            generation.provider_job_id = await provider.submit(generation)
+            generation.status = "queued"
+            shot.status = "queued"
+            jobs[generation.id] = generation
+        except Exception as exc:
+            generation.status = "failed"
+            generation.error = str(exc)
+            shot.status = "failed"
+            shot.error = str(exc)
+            jobs[generation.id] = generation
+            ad_job.status = "failed"
+            ad_job.error = f"{shot.id} submission failed: {exc}"
+            ad_jobs[ad_job.id] = ad_job
+            return ad_job
+
+    ad_job.status = "generating"
+    ad_jobs[ad_job.id] = ad_job
+    return ad_job
+
+
+@app.get("/v1/ads/{ad_id}", response_model=AdRenderJob)
+async def get_ad(ad_id: UUID):
+    """Refresh all child shots and report parent ad readiness."""
+    ad_job = ad_jobs.get(ad_id)
+    if not ad_job:
+        raise HTTPException(status_code=404, detail="Ad render job not found")
+
+    provider = ModalProvider()
+    any_failed = False
+    all_generated = True
+
+    for shot in ad_job.plan.shots:
+        if not shot.generation_job_id:
+            all_generated = False
+            continue
+        generation = jobs.get(shot.generation_job_id)
+        if not generation:
+            shot.status = "failed"
+            shot.error = "Child generation job missing"
+            any_failed = True
+            continue
+
+        if generation.provider_job_id and generation.status not in {"generated", "failed"}:
+            try:
+                state = await provider.status(generation.provider_job_id)
+                status = state.get("status")
+                if status == "generated":
+                    generation.status = "generated"
+                    generation.assets = list(state.get("assets", []))
+                elif status in {"queued", "generating"}:
+                    generation.status = "generating"
+                elif status == "failed":
+                    generation.status = "failed"
+                    generation.error = str(state.get("error") or "Modal generation failed")
+                jobs[generation.id] = generation
+            except Exception as exc:
+                generation.status = "failed"
+                generation.error = str(exc)
+                jobs[generation.id] = generation
+
+        shot.status = generation.status
+        shot.assets = list(generation.assets)
+        shot.error = generation.error
+        if generation.status == "failed":
+            any_failed = True
+        if generation.status != "generated":
+            all_generated = False
+
+    if any_failed:
+        ad_job.status = "failed"
+    elif all_generated:
+        ad_job.status = "ready_to_stitch"
+    else:
+        ad_job.status = "generating"
+
+    ad_jobs[ad_job.id] = ad_job
+    return ad_job
 
 @app.get("/v1/benchmarks")
 async def list_benchmarks():
