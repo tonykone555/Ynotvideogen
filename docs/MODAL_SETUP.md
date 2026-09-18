@@ -31,15 +31,23 @@ The API returns a job immediately. GPU work runs asynchronously. Never keep a Ve
    `modal deploy modal_app.py`
 
 4. Smoke-test GPU allocation before downloading any model:
-   `modal run modal_app.py::smoke`
+   `modal run modal_app.py::gpu_probe`
 
-Expected result: JSON with `ok: true`, GPU name, and VRAM.
+5. Install the official Wan 2.2 I2V files into the persistent model volume:
+   `modal run modal_app.py::install_wan22_models`
+
+6. Validate the pinned ComfyUI worker, native Wan nodes, and model visibility:
+   `modal run modal_app.py::comfy_probe`
+
+The worker is pinned to ComfyUI `v0.36.0`. The probe reports readiness separately for Wan, LTX and Kandinsky so optional LTX/Kandinsky nodes no longer block the first Wan render.
 
 ## Model files
 
 Model weights should live in `ynot-video-models`, not inside the container image. This keeps cold-start images smaller and avoids downloading multi-GB weights every render.
 
-After we choose the exact ComfyUI-native workflow for each model, add a model installer script that writes into the mounted Modal volume.
+Wan 2.2 now has a worker-side installer backed by the official `Comfy-Org/Wan_2.2_ComfyUI_Repackaged` repository. It installs the two 14B I2V FP8 diffusion files, UMT5 text encoder and Wan 2.1 VAE into the exact ComfyUI folders exposed from the persistent `ynot-video-models` volume.
+
+LTX and Kandinsky remain optional follow-up families and still need their own validated installers/workflows before they should be benchmarked.
 
 ## First render sequence
 
@@ -54,7 +62,7 @@ Record wall time, GPU, workflow/model version, seed, dimensions, frames, and mea
 
 ## Important current limitation
 
-The orchestration path is ready, but the model-specific ComfyUI graphs still need to be validated against the exact current node names and model files installed in the Modal worker. Do not call the first generation path production-ready until a GPU smoke test and one real Wan render have both succeeded.
+The Wan compiler now targets native ComfyUI node names that are checked against `/object_info` before every render, and the worker verifies required model filenames before queueing a prompt. A real GPU render still must succeed before this is called production-ready.
 
 ## YNOT variables
 
