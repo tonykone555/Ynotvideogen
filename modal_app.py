@@ -6,6 +6,7 @@ import subprocess
 import time
 from pathlib import Path
 from urllib.error import URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 import modal
@@ -68,6 +69,73 @@ def _start_comfy() -> subprocess.Popen:
     return proc
 
 
+def _safe_input_name(url: str, index: int) -> str:
+    parsed = urlparse(url)
+    suffix = Path(parsed.path).suffix.lower()
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+        suffix = ".png"
+    return f"reference-{index}{suffix}"
+
+
+def _download_reference(url: str, job_id: str, index: int) -> str:
+    if not url.startswith(("https://", "http://")):
+        raise ValueError(f"Reference URL must use http(s): {url!r}")
+
+    folder = Path("/opt/ComfyUI/input") / "YNOT" / job_id
+    folder.mkdir(parents=True, exist_ok=True)
+    filename = _safe_input_name(url, index)
+    target = folder / filename
+
+    request = Request(url, headers={"User-Agent": "YNOT-Video-Gen/1.0"})
+    with urlopen(request, timeout=60) as response:
+        content_type = (response.headers.get("Content-Type") or "").lower()
+        if content_type and not content_type.startswith("image/"):
+            raise ValueError(f"Reference URL did not return an image: {content_type}")
+        data = response.read(25 * 1024 * 1024 + 1)
+
+    if len(data) > 25 * 1024 * 1024:
+        raise ValueError("Reference image exceeds 25 MB.")
+    if not data:
+        raise ValueError("Reference image was empty.")
+
+    target.write_bytes(data)
+    return str(Path("YNOT") / job_id / filename)
+
+
+def _stage_remote_inputs(workflow: dict, metadata: dict) -> dict:
+    staged = json.loads(json.dumps(workflow))
+    job_id = str(metadata.get("job_id") or f"job-{int(time.time())}")
+    index = 0
+
+    for node in staged.values():
+        if not isinstance(node, dict) or node.get("class_type") != "LoadImageFromUrl":
+            continue
+        inputs = node.get("inputs") or {}
+        url = str(inputs.get("url") or "")
+        index += 1
+        relative_path = _download_reference(url, job_id, index)
+        node["class_type"] = "LoadImage"
+        node["inputs"] = {"image": relative_path}
+
+    return staged
+
+
+def _validate_workflow_nodes(workflow: dict) -> None:
+    object_info = _get_json("/object_info")
+    required = sorted({
+        str(node.get("class_type"))
+        for node in workflow.values()
+        if isinstance(node, dict) and node.get("class_type")
+    })
+    missing = [name for name in required if name not in object_info]
+    if missing:
+        raise RuntimeError(
+            "ComfyUI worker is missing required nodes: "
+            + ", ".join(missing)
+            + ". Pin/install the matching native workflow before rendering."
+        )
+
+
 def _post_json(path: str, payload: dict) -> dict:
     body = json.dumps(payload).encode("utf-8")
     req = Request(
@@ -122,7 +190,9 @@ def render_l40s(workflow: dict, metadata: dict | None = None) -> dict:
     proc = _start_comfy()
     started = time.time()
     try:
-        queued = _post_json("/prompt", {"prompt": workflow})
+        staged_workflow = _stage_remote_inputs(workflow, metadata or {})
+        _validate_workflow_nodes(staged_workflow)
+        queued = _post_json("/prompt", {"prompt": staged_workflow})
         prompt_id = queued["prompt_id"]
         history = _wait_for_prompt(prompt_id)
         result = {
