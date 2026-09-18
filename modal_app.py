@@ -20,6 +20,14 @@ app = modal.App(APP_NAME)
 models = modal.Volume.from_name("ynot-video-models", create_if_missing=True)
 outputs = modal.Volume.from_name("ynot-video-outputs", create_if_missing=True)
 
+WAN22_REPO = "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"
+WAN22_FILES = {
+    "split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors": "diffusion_models",
+    "split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors": "diffusion_models",
+    "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors": "text_encoders",
+    "split_files/vae/wan_2.1_vae.safetensors": "vae",
+}
+
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("git", "ffmpeg", "curl")
@@ -27,6 +35,7 @@ image = (
         "httpx>=0.27",
         "requests>=2.32",
         "pillow>=10.4",
+        "huggingface_hub>=0.34",
     )
     .run_commands(
         "git clone --depth 1 --branch v0.36.0 https://github.com/Comfy-Org/ComfyUI.git /opt/ComfyUI",
@@ -304,39 +313,72 @@ def gpu_probe() -> dict:
     return {"ok": True, "gpu": name, "memory": memory}
 
 
-@app.function(image=image, gpu="L4", timeout=180)
+@app.function(
+    image=image,
+    gpu="L4",
+    volumes={"/models": models},
+    timeout=180,
+)
 def comfy_probe() -> dict:
-    """Start the pinned worker image and report whether required workflow nodes exist."""
+    """Report readiness per model family without blocking Wan on optional nodes."""
     proc = _start_comfy()
     try:
         object_info = _get_json("/object_info")
-        required = [
-            "LoadImage",
-            "UNETLoader",
-            "CLIPLoader",
-            "VAELoader",
-            "CLIPTextEncode",
-            "WanImageToVideo",
-            "KSamplerAdvanced",
-            "VAEDecode",
-            "CreateVideo",
-            "SaveVideo",
-            "CheckpointLoaderSimple",
-            "LTXVImgToVideo",
-            "KSampler",
-            "Kandinsky5TextEncoderLoader",
-            "Kandinsky5UNETLoader",
-            "Kandinsky5TextEncode",
-            "Kandinsky5ImageToVideo",
-        ]
-        available = [name for name in required if name in object_info]
-        missing = [name for name in required if name not in object_info]
+        families = {
+            "wan": [
+                "LoadImage",
+                "UNETLoader",
+                "CLIPLoader",
+                "VAELoader",
+                "CLIPTextEncode",
+                "WanImageToVideo",
+                "KSamplerAdvanced",
+                "VAEDecode",
+                "CreateVideo",
+                "SaveVideo",
+            ],
+            "ltx": [
+                "LoadImage",
+                "CheckpointLoaderSimple",
+                "CLIPTextEncode",
+                "LTXVImgToVideo",
+                "KSampler",
+                "VAEDecode",
+                "CreateVideo",
+                "SaveVideo",
+            ],
+            "kandinsky": [
+                "LoadImage",
+                "VAELoader",
+                "Kandinsky5TextEncoderLoader",
+                "Kandinsky5UNETLoader",
+                "Kandinsky5TextEncode",
+                "Kandinsky5ImageToVideo",
+                "SaveVideo",
+            ],
+        }
+        readiness = {}
+        for family, required in families.items():
+            missing = [name for name in required if name not in object_info]
+            readiness[family] = {
+                "ready": not missing,
+                "missing_nodes": missing,
+            }
+
         model_files = sorted(_available_model_files())
+        required_wan_models = [Path(name).name for name in WAN22_FILES]
+        missing_wan_models = [
+            name for name in required_wan_models if name not in model_files
+        ]
+        readiness["wan"]["missing_models"] = missing_wan_models
+        readiness["wan"]["ready"] = (
+            readiness["wan"]["ready"] and not missing_wan_models
+        )
+
         return {
-            "ok": not missing,
-            "required_count": len(required),
-            "available": available,
-            "missing": missing,
+            "ok": readiness["wan"]["ready"],
+            "first_render_ready": readiness["wan"]["ready"],
+            "families": readiness,
             "comfy_node_count": len(object_info),
             "model_file_count": len(model_files),
             "model_files": model_files[:80],
@@ -345,6 +387,44 @@ def comfy_probe() -> dict:
         }
     finally:
         proc.terminate()
+
+
+@app.function(
+    image=image,
+    volumes={"/models": models},
+    timeout=60 * 60 * 4,
+)
+def install_wan22_models() -> dict:
+    """Install the official Comfy-Org Wan 2.2 I2V files into the persistent Modal volume."""
+    from huggingface_hub import hf_hub_download
+
+    installed: list[str] = []
+    for remote_path, target_folder in WAN22_FILES.items():
+        filename = Path(remote_path).name
+        target_dir = Path("/models") / target_folder
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / filename
+        if target.exists() and target.stat().st_size > 1024 * 1024:
+            installed.append(str(target))
+            continue
+
+        downloaded = Path(
+            hf_hub_download(
+                repo_id=WAN22_REPO,
+                filename=remote_path,
+                local_dir="/tmp/ynot-wan22",
+            )
+        )
+        downloaded.replace(target)
+        installed.append(str(target))
+
+    models.commit()
+    return {
+        "ok": True,
+        "repo": WAN22_REPO,
+        "installed": installed,
+        "count": len(installed),
+    }
 
 
 @app.local_entrypoint()
