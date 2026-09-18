@@ -13,15 +13,18 @@
 - persistent Modal model/output volumes
 - L40S default worker + A100 fallback
 - cheap GPU smoke probe
+- reference-image staging into native ComfyUI `LoadImage`
+- pre-render `/object_info` node compatibility validation
+- ComfyUI compatibility probe for Wan/LTX/Kandinsky node availability
 
 ## Before first real render
 - authenticate a Modal workspace
 - deploy `modal_app.py`
 - run `gpu_probe`
 - install the exact Wan 2.2 model files into the model volume
-- validate the compiled Wan workflow against the installed ComfyUI version
+- validate the compiled Wan workflow against the installed ComfyUI version using `/object_info`
 - replace any non-native/custom placeholder node with a versioned supported node/workflow
-- stage reference images into ComfyUI input
+- run `comfy_probe` and inspect missing node classes
 - render a 5-second 9:16 Wan I2V clip
 - persist final asset outside the ephemeral API response
 
