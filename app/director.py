@@ -1,0 +1,33 @@
+from app.models import ContinuityMode, GenerationPlan, GenerationRequest, ProviderName
+
+
+def plan_generation(request: GenerationRequest) -> GenerationPlan:
+    mode = request.continuity_mode
+    reasons: list[str] = []
+
+    locked = [r for r in request.references if r.lock_identity]
+    has_video = any(r.role == "video" for r in request.references)
+
+    if mode == ContinuityMode.AUTO:
+        if has_video:
+            mode = ContinuityMode.REPAIR
+            reasons.append("Video reference supplied; preserve existing temporal structure.")
+        elif len(locked) >= 2 or request.duration_seconds > 8:
+            mode = ContinuityMode.LINKED
+            reasons.append("Multiple locked references or longer duration favor linked continuity.")
+        else:
+            mode = ContinuityMode.CONTINUOUS
+            reasons.append("Short creative favors a single continuous generation.")
+
+    provider = request.provider
+    if provider == ProviderName.AUTO:
+        provider = ProviderName.COMFYUI
+        reasons.append("Open-model ComfyUI route is the default benchmark path.")
+
+    model = request.model or "wan2.2"
+    return GenerationPlan(
+        continuity_mode=mode,
+        provider=provider,
+        model=model,
+        rationale=reasons,
+    )
