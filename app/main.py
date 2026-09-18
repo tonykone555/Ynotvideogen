@@ -12,7 +12,7 @@ from app.storyboard import shot_to_generation
 from app.workflows.compiler import compile_workflow
 from app.workflows.registry import MODELS
 
-app = FastAPI(title="YNOT Video Gen", version="0.4.0")
+app = FastAPI(title="YNOT Video Gen", version="0.5.0")
 
 
 @app.get("/health")
@@ -20,6 +20,43 @@ async def health():
     return {"ok": True, "service": "ynot-video-gen"}
 
 
+
+
+def _collect_ad_clip_assets(ad_job: AdRenderJob) -> list[str]:
+    assets: list[str] = []
+    for shot in ad_job.plan.shots:
+        if not shot.assets:
+            return []
+        assets.append(shot.assets[0])
+    return assets
+
+
+async def _refresh_ad_stitch(ad_job: AdRenderJob, provider: ModalProvider) -> AdRenderJob:
+    if not ad_job.stitch_provider_job_id:
+        return ad_job
+    try:
+        state = await provider.stitch_status(ad_job.stitch_provider_job_id)
+    except Exception as exc:
+        ad_job.status = "failed"
+        ad_job.error = f"Stitch refresh failed: {exc}"
+        return ad_job
+
+    status = state.get("status")
+    if status == "generated":
+        assets = list(state.get("assets", []))
+        if not assets:
+            ad_job.status = "failed"
+            ad_job.error = "Stitch worker completed without a final asset."
+        else:
+            ad_job.final_asset = assets[0]
+            ad_job.status = "generated"
+            ad_job.error = None
+    elif status in {"queued", "generating"}:
+        ad_job.status = "stitching"
+    elif status == "failed":
+        ad_job.status = "failed"
+        ad_job.error = str(state.get("error") or "Ad stitching failed")
+    return ad_job
 
 @app.post("/v1/ads/plan")
 async def create_ad_plan(request: AdRequest):
@@ -109,9 +146,59 @@ async def get_ad(ad_id: UUID):
     if any_failed:
         ad_job.status = "failed"
     elif all_generated:
-        ad_job.status = "ready_to_stitch"
+        if ad_job.stitch_provider_job_id:
+            ad_job = await _refresh_ad_stitch(ad_job, provider)
+        else:
+            assets = _collect_ad_clip_assets(ad_job)
+            if assets:
+                try:
+                    ad_job.stitch_provider_job_id = await provider.submit_stitch(
+                        str(ad_job.id), assets
+                    )
+                    ad_job.status = "stitching"
+                except Exception as exc:
+                    ad_job.status = "failed"
+                    ad_job.error = f"Automatic stitch submission failed: {exc}"
+            else:
+                ad_job.status = "ready_to_stitch"
     else:
         ad_job.status = "generating"
+
+    ad_jobs[ad_job.id] = ad_job
+    return ad_job
+
+
+@app.post("/v1/ads/{ad_id}/stitch", response_model=AdRenderJob)
+async def stitch_ad(ad_id: UUID):
+    """Idempotently start the final 1080x1920 MP4 stitch once all four shots exist."""
+    ad_job = ad_jobs.get(ad_id)
+    if not ad_job:
+        raise HTTPException(status_code=404, detail="Ad render job not found")
+    if ad_job.status == "generated":
+        return ad_job
+
+    provider = ModalProvider()
+    if ad_job.stitch_provider_job_id:
+        ad_job = await _refresh_ad_stitch(ad_job, provider)
+        ad_jobs[ad_job.id] = ad_job
+        return ad_job
+
+    assets = _collect_ad_clip_assets(ad_job)
+    if len(assets) != len(ad_job.plan.shots):
+        raise HTTPException(
+            status_code=409,
+            detail="All four ad shots must be generated before stitching.",
+        )
+
+    try:
+        ad_job.stitch_provider_job_id = await provider.submit_stitch(str(ad_job.id), assets)
+        ad_job.status = "stitching"
+        ad_job.error = None
+    except Exception as exc:
+        ad_job.status = "failed"
+        ad_job.error = f"Stitch submission failed: {exc}"
+        ad_jobs[ad_job.id] = ad_job
+        raise HTTPException(status_code=502, detail=ad_job.error) from exc
 
     ad_jobs[ad_job.id] = ad_job
     return ad_job
