@@ -2,6 +2,7 @@ from uuid import UUID
 
 from fastapi import FastAPI, HTTPException
 
+from app.benchmarks import BASELINE_MATRIX, build_benchmark_requests
 from app.director import plan_generation
 from app.models import GenerationJob, GenerationRequest
 from app.store import jobs
@@ -14,6 +15,36 @@ app = FastAPI(title="YNOT Video Gen", version="0.2.0")
 @app.get("/health")
 async def health():
     return {"ok": True, "service": "ynot-video-gen"}
+
+
+@app.get("/v1/benchmarks")
+async def list_benchmarks():
+    return [
+        {
+            "key": variant.key,
+            "model": variant.model,
+            "continuity_mode": variant.continuity_mode,
+            "metadata": variant.metadata,
+            "purpose": variant.purpose,
+        }
+        for variant in BASELINE_MATRIX
+    ]
+
+
+@app.post("/v1/benchmarks/compile")
+async def compile_benchmark(request: GenerationRequest):
+    output = []
+    for key, purpose, variant_request in build_benchmark_requests(request):
+        job = GenerationJob(request=variant_request, plan=plan_generation(variant_request))
+        compiled = compile_workflow(job)
+        output.append({
+            "key": key,
+            "purpose": purpose,
+            "plan": job.plan,
+            "parameters": compiled.parameters,
+            "workflow": compiled.prompt,
+        })
+    return {"variants": output}
 
 
 @app.get("/v1/models")
