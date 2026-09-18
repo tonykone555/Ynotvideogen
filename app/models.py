@@ -55,3 +55,61 @@ class GenerationJob(BaseModel):
     provider_job_id: str | None = None
     assets: list[str] = Field(default_factory=list)
     error: str | None = None
+
+
+AdShotPurpose = Literal["hook", "hero", "benefit", "cta"]
+AdShotStatus = Literal["planned", "queued", "generating", "generated", "failed"]
+
+
+class AdReferenceImage(BaseModel):
+    url: str
+    role: Literal["product", "character", "environment", "style"] = "product"
+    lock_identity: bool = True
+
+
+class AdRequest(BaseModel):
+    product_title: str
+    product_description: str = ""
+    category: str = "general"
+    platform: str = "tiktok"
+    style: str = "natural premium"
+    angle: str = "aesthetic"
+    aspect_ratio: Literal["9:16"] = "9:16"
+    shots: int = Field(default=4, ge=4, le=4)
+    shot_duration_seconds: float = Field(default=2.0, ge=1.5, le=4.0)
+    reference_images: list[AdReferenceImage] = Field(min_length=1)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AdShot(BaseModel):
+    id: str
+    purpose: AdShotPurpose
+    duration_seconds: float
+    prompt: str
+    negative_prompt: str
+    camera_style: str
+    continuity_note: str
+    status: AdShotStatus = "planned"
+    generation_job_id: UUID | None = None
+    assets: list[str] = Field(default_factory=list)
+    score: dict[str, float] = Field(default_factory=dict)
+    error: str | None = None
+
+
+class AdPlan(BaseModel):
+    concept: str
+    platform: str
+    style: str
+    angle: str
+    aspect_ratio: Literal["9:16"] = "9:16"
+    mobile_safe_area: str = "Keep product/action in center 70%; reserve upper/lower edges for UI/text."
+    shots: list[AdShot]
+
+
+class AdRenderJob(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    status: Literal["planned", "queued", "generating", "ready_to_stitch", "generated", "failed"] = "planned"
+    request: AdRequest
+    plan: AdPlan
+    final_asset: str | None = None
+    error: str | None = None
