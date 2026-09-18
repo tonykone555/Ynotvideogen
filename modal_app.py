@@ -29,9 +29,11 @@ image = (
         "pillow>=10.4",
     )
     .run_commands(
-        "git clone --depth 1 https://github.com/Comfy-Org/ComfyUI.git /opt/ComfyUI",
+        "git clone --depth 1 --branch v0.36.0 https://github.com/Comfy-Org/ComfyUI.git /opt/ComfyUI",
         "pip install -r /opt/ComfyUI/requirements.txt",
         "mkdir -p /opt/ComfyUI/input /opt/ComfyUI/output /models /outputs",
+        "mkdir -p /models/checkpoints /models/diffusion_models /models/text_encoders /models/clip /models/vae /models/clip_vision",
+        "printf 'ynot:\\n  base_path: /models\\n  checkpoints: checkpoints\\n  diffusion_models: diffusion_models\\n  text_encoders: text_encoders\\n  clip: clip\\n  vae: vae\\n  clip_vision: clip_vision\\n' > /opt/ComfyUI/extra_model_paths.yaml",
     )
 )
 
@@ -50,7 +52,6 @@ def _wait_for_comfy(timeout_seconds: int = 120) -> None:
 
 def _start_comfy() -> subprocess.Popen:
     env = os.environ.copy()
-    env["COMFYUI_MODEL_PATH"] = "/models"
     proc = subprocess.Popen(
         [
             "python",
@@ -60,6 +61,8 @@ def _start_comfy() -> subprocess.Popen:
             "--port",
             str(COMFY_PORT),
             "--disable-auto-launch",
+            "--extra-model-paths-config",
+            "/opt/ComfyUI/extra_model_paths.yaml",
             "--output-directory",
             "/outputs",
         ],
@@ -118,6 +121,48 @@ def _stage_remote_inputs(workflow: dict, metadata: dict) -> dict:
         node["inputs"] = {"image": relative_path}
 
     return staged
+
+
+def _model_names_from_workflow(workflow: dict) -> list[str]:
+    keys = {
+        "unet_name",
+        "ckpt_name",
+        "clip_name",
+        "clip_name1",
+        "clip_name2",
+        "vae_name",
+    }
+    names: list[str] = []
+    for node in workflow.values():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs") or {}
+        for key in keys:
+            value = inputs.get(key)
+            if isinstance(value, str) and value and value not in names:
+                names.append(value)
+    return names
+
+
+def _available_model_files() -> set[str]:
+    root = Path("/models")
+    if not root.exists():
+        return set()
+    return {path.name for path in root.rglob("*") if path.is_file()}
+
+
+def _validate_model_files(workflow: dict) -> None:
+    required = _model_names_from_workflow(workflow)
+    if not required:
+        return
+    available = _available_model_files()
+    missing = [name for name in required if name not in available]
+    if missing:
+        raise RuntimeError(
+            "Modal model volume is missing required files: "
+            + ", ".join(missing)
+            + ". Install them into ynot-video-models using ComfyUI model folders."
+        )
 
 
 def _validate_workflow_nodes(workflow: dict) -> None:
@@ -192,6 +237,7 @@ def render_l40s(workflow: dict, metadata: dict | None = None) -> dict:
     try:
         staged_workflow = _stage_remote_inputs(workflow, metadata or {})
         _validate_workflow_nodes(staged_workflow)
+        _validate_model_files(staged_workflow)
         queued = _post_json("/prompt", {"prompt": staged_workflow})
         prompt_id = queued["prompt_id"]
         history = _wait_for_prompt(prompt_id)
@@ -222,7 +268,10 @@ def render_a100(workflow: dict, metadata: dict | None = None) -> dict:
     proc = _start_comfy()
     started = time.time()
     try:
-        queued = _post_json("/prompt", {"prompt": workflow})
+        staged_workflow = _stage_remote_inputs(workflow, metadata or {})
+        _validate_workflow_nodes(staged_workflow)
+        _validate_model_files(staged_workflow)
+        queued = _post_json("/prompt", {"prompt": staged_workflow})
         prompt_id = queued["prompt_id"]
         history = _wait_for_prompt(prompt_id)
         result = {
@@ -282,12 +331,17 @@ def comfy_probe() -> dict:
         ]
         available = [name for name in required if name in object_info]
         missing = [name for name in required if name not in object_info]
+        model_files = sorted(_available_model_files())
         return {
             "ok": not missing,
             "required_count": len(required),
             "available": available,
             "missing": missing,
             "comfy_node_count": len(object_info),
+            "model_file_count": len(model_files),
+            "model_files": model_files[:80],
+            "comfy_version": "v0.36.0",
+            "model_root": "/models",
         }
     finally:
         proc.terminate()
