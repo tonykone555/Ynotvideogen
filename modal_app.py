@@ -20,13 +20,28 @@ app = modal.App(APP_NAME)
 models = modal.Volume.from_name("ynot-video-models", create_if_missing=True)
 outputs = modal.Volume.from_name("ynot-video-outputs", create_if_missing=True)
 
-WAN22_REPO = "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"
-WAN22_FILES = {
-    "split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors": "diffusion_models",
-    "split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors": "diffusion_models",
-    "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors": "text_encoders",
-    "split_files/vae/wan_2.1_vae.safetensors": "vae",
-}
+WAN22_FILES = [
+    {
+        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "filename": "split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
+        "target_folder": "diffusion_models",
+    },
+    {
+        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "filename": "split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors",
+        "target_folder": "diffusion_models",
+    },
+    {
+        "repo_id": "Comfy-Org/Wan_2.1_ComfyUI_repackaged",
+        "filename": "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        "target_folder": "text_encoders",
+    },
+    {
+        "repo_id": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "filename": "split_files/vae/wan_2.1_vae.safetensors",
+        "target_folder": "vae",
+    },
+]
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -366,7 +381,7 @@ def comfy_probe() -> dict:
             }
 
         model_files = sorted(_available_model_files())
-        required_wan_models = [Path(name).name for name in WAN22_FILES]
+        required_wan_models = [Path(item["filename"]).name for item in WAN22_FILES]
         missing_wan_models = [
             name for name in required_wan_models if name not in model_files
         ]
@@ -395,36 +410,59 @@ def comfy_probe() -> dict:
     timeout=60 * 60 * 4,
 )
 def install_wan22_models() -> dict:
-    """Install the official Comfy-Org Wan 2.2 I2V files into the persistent Modal volume."""
+    """Install the official ComfyUI-packaged Wan 2.2 I2V files into the persistent Modal volume."""
     from huggingface_hub import hf_hub_download
 
-    installed: list[str] = []
-    for remote_path, target_folder in WAN22_FILES.items():
+    installed: list[dict] = []
+    for item in WAN22_FILES:
+        remote_path = item["filename"]
+        target_folder = item["target_folder"]
         filename = Path(remote_path).name
         target_dir = Path("/models") / target_folder
         target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / filename
+
         if target.exists() and target.stat().st_size > 1024 * 1024:
-            installed.append(str(target))
+            installed.append(
+                {
+                    "path": str(target),
+                    "repo_id": item["repo_id"],
+                    "status": "present",
+                    "bytes": target.stat().st_size,
+                }
+            )
             continue
 
         downloaded = Path(
             hf_hub_download(
-                repo_id=WAN22_REPO,
+                repo_id=item["repo_id"],
                 filename=remote_path,
                 local_dir="/tmp/ynot-wan22",
             )
         )
         downloaded.replace(target)
-        installed.append(str(target))
+        installed.append(
+            {
+                "path": str(target),
+                "repo_id": item["repo_id"],
+                "status": "downloaded",
+                "bytes": target.stat().st_size,
+            }
+        )
+        models.commit()
 
-    models.commit()
     return {
         "ok": True,
-        "repo": WAN22_REPO,
         "installed": installed,
         "count": len(installed),
     }
+
+
+@app.local_entrypoint()
+def install_wan22():
+    result = install_wan22_models.remote()
+    print(result)
+    print(comfy_probe.remote())
 
 
 @app.local_entrypoint()
