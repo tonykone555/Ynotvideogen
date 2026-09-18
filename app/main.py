@@ -5,13 +5,42 @@ from fastapi import FastAPI, HTTPException
 from app.director import plan_generation
 from app.models import GenerationJob, GenerationRequest
 from app.store import jobs
+from app.workflows.compiler import compile_workflow
+from app.workflows.registry import MODELS
 
-app = FastAPI(title="YNOT Video Gen", version="0.1.0")
+app = FastAPI(title="YNOT Video Gen", version="0.2.0")
 
 
 @app.get("/health")
 async def health():
     return {"ok": True, "service": "ynot-video-gen"}
+
+
+@app.get("/v1/models")
+async def list_models():
+    return {
+        key: {
+            "family": profile.family,
+            "task": profile.task,
+            "supports_linked": profile.supports_linked,
+            "supports_repair": profile.supports_repair,
+        }
+        for key, profile in MODELS.items()
+    }
+
+
+@app.post("/v1/compile")
+async def compile_generation(request: GenerationRequest):
+    job = GenerationJob(request=request, plan=plan_generation(request))
+    compiled = compile_workflow(job)
+    return {
+        "plan": job.plan,
+        "model": compiled.model,
+        "family": compiled.family,
+        "task": compiled.task,
+        "parameters": compiled.parameters,
+        "workflow": compiled.prompt,
+    }
 
 
 @app.post("/v1/generations", response_model=GenerationJob)
