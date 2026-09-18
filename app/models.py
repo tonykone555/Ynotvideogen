@@ -17,6 +17,7 @@ class ContinuityMode(StrEnum):
 class ProviderName(StrEnum):
     AUTO = "auto"
     COMFYUI = "comfyui"
+    MODAL = "modal"
     FAL = "fal"
     GROK = "grok"
 
