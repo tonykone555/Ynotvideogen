@@ -1,4 +1,5 @@
 from app.models import ContinuityMode, GenerationPlan, GenerationRequest, ProviderName
+from app.workflows.registry import choose_model, resolve_model
 
 
 def plan_generation(request: GenerationRequest) -> GenerationPlan:
@@ -24,7 +25,16 @@ def plan_generation(request: GenerationRequest) -> GenerationPlan:
         provider = ProviderName.COMFYUI
         reasons.append("Open-model ComfyUI route is the default benchmark path.")
 
-    model = request.model or "wan2.2"
+    model = request.model or choose_model(mode)
+    profile = resolve_model(model)
+
+    if mode == ContinuityMode.REPAIR and not profile.supports_repair:
+        model = "ltx2"
+        reasons.append("Requested model lacks repair support; routed to LTX.")
+    elif mode == ContinuityMode.LINKED and not profile.supports_linked:
+        model = "wan2.2"
+        reasons.append("Requested model lacks linked continuity; routed to Wan.")
+
     return GenerationPlan(
         continuity_mode=mode,
         provider=provider,
