@@ -108,8 +108,9 @@ class AdPlan(BaseModel):
 
 class AdRenderJob(BaseModel):
     id: UUID = Field(default_factory=uuid4)
-    status: Literal["planned", "queued", "generating", "ready_to_stitch", "generated", "failed"] = "planned"
+    status: Literal["planned", "queued", "generating", "ready_to_stitch", "stitching", "generated", "failed"] = "planned"
     request: AdRequest
     plan: AdPlan
+    stitch_provider_job_id: str | None = None
     final_asset: str | None = None
     error: str | None = None
