@@ -22,8 +22,8 @@ def plan_generation(request: GenerationRequest) -> GenerationPlan:
 
     provider = request.provider
     if provider == ProviderName.AUTO:
-        provider = ProviderName.COMFYUI
-        reasons.append("Open-model ComfyUI route is the default benchmark path.")
+        provider = ProviderName.MODAL
+        reasons.append("Modal-hosted ComfyUI is the default open-model benchmark route.")
 
     model = request.model or choose_model(mode)
     profile = resolve_model(model)
