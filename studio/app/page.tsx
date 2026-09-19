@@ -185,6 +185,9 @@ export default function StudioPage() {
   const [productImage, setProductImage] = useState<string | null>(null);
   const [productFile, setProductFile] = useState<File | null>(null);
   const [remoteImageUrl, setRemoteImageUrl] = useState("");
+  const [creatorImage, setCreatorImage] = useState<string | null>(null);
+  const [creatorFile, setCreatorFile] = useState<File | null>(null);
+  const [remoteCreatorUrl, setRemoteCreatorUrl] = useState("");
   const [plan, setPlan] = useState<AdPlan>(defaultPlan);
   const [selectedShot, setSelectedShot] = useState(0);
   const [job, setJob] = useState<AdJob | null>(null);
@@ -202,8 +205,9 @@ export default function StudioPage() {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
       if (productImage?.startsWith("blob:")) URL.revokeObjectURL(productImage);
+      if (creatorImage?.startsWith("blob:")) URL.revokeObjectURL(creatorImage);
     };
-  }, [productImage]);
+  }, [productImage, creatorImage]);
 
   function onImage(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -226,7 +230,28 @@ export default function StudioPage() {
     return data.url as string;
   }
 
-  function requestBody(url: string) {
+  function onCreatorImage(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (creatorImage?.startsWith("blob:")) URL.revokeObjectURL(creatorImage);
+    setCreatorFile(file);
+    setCreatorImage(URL.createObjectURL(file));
+    setRemoteCreatorUrl("");
+  }
+
+  async function uploadCreatorReference() {
+    if (remoteCreatorUrl.trim()) return remoteCreatorUrl.trim();
+    if (!creatorFile) return "";
+    const form = new FormData();
+    form.append("file", creatorFile);
+    const res = await fetch(API + "/v1/uploads", { method: "POST", body: form });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Creator image upload failed.");
+    const data = await res.json();
+    setRemoteCreatorUrl(data.url);
+    return data.url as string;
+  }
+
+  function requestBody(url: string, creatorUrl = "") {
     return {
       product_title: productTitle || "Untitled product",
       product_description: description,
@@ -243,7 +268,10 @@ export default function StudioPage() {
       aspect_ratio: aspectRatio,
       shots: generationMode === "single_clip" ? 1 : 4,
       shot_duration_seconds: 5,
-      reference_images: [{ url, role: "product", lock_identity: true }],
+      reference_images: [
+        { url, role: "product", lock_identity: true },
+        ...(creatorUrl ? [{ url: creatorUrl, role: "character", lock_identity: true }] : []),
+      ],
       metadata: {
         tone: tone.toLowerCase(),
         camera_preference: camera.toLowerCase(),
@@ -263,10 +291,11 @@ export default function StudioPage() {
     setBusy("plan");
     try {
       const url = await uploadReference();
+      const creatorUrl = await uploadCreatorReference();
       const res = await fetch(API + "/v1/ads/plan", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(requestBody(url)),
+        body: JSON.stringify(requestBody(url, creatorUrl)),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Could not build storyboard.");
       setPlan(await res.json());
@@ -282,10 +311,11 @@ export default function StudioPage() {
     setBusy("generate");
     try {
       const url = await uploadReference();
+      const creatorUrl = await uploadCreatorReference();
       const res = await fetch(API + "/v1/ads/generate", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(requestBody(url)),
+        body: JSON.stringify(requestBody(url, creatorUrl)),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Generation could not start.");
       const next: AdJob = await res.json();
@@ -367,6 +397,25 @@ export default function StudioPage() {
               )}
               <input type="file" accept="image/jpeg,image/png,image/webp" onChange={onImage}/>
             </label>
+
+            <div className="sectionBlock">
+              <div className="sectionTitle"><span>Creator consistency</span><small>Optional locked identity</small></div>
+              <label className="creatorUpload">
+                {creatorImage ? (
+                  <>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={creatorImage} alt="Creator reference"/>
+                    <span className="replace"><ImagePlus size={15}/> Replace creator</span>
+                  </>
+                ) : (
+                  <div className="creatorEmpty">
+                    <ImagePlus size={18}/>
+                    <div><strong>Add creator reference</strong><small>Reuse the same person across generated shots.</small></div>
+                  </div>
+                )}
+                <input type="file" accept="image/jpeg,image/png,image/webp" onChange={onCreatorImage}/>
+              </label>
+            </div>
 
             <div className="fieldGrid">
               <label className="field fieldWide">
