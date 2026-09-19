@@ -167,7 +167,7 @@ export default function StudioPage() {
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("Home & Living");
   const [platform, setPlatform] = useState("tiktok");
-  const [duration, setDuration] = useState(2);
+  const [duration, setDuration] = useState(5);
   const [productImage, setProductImage] = useState<string | null>(null);
   const [productFile, setProductFile] = useState<File | null>(null);
   const [remoteImageUrl, setRemoteImageUrl] = useState("");
@@ -316,7 +316,7 @@ export default function StudioPage() {
             <h1>Gen Studio <span className="beta">BETA</span></h1>
           </div>
           <div className="topActions">
-            <div className="engineBadge"><span className="pulse"/> WAN 2.2 <b>READY PIPELINE</b></div>
+            <div className="engineBadge"><span className="pulse"/> SEEDANCE 2.5 <b>KIE READY</b></div>
             <button className="iconBtn"><Menu size={18}/></button>
           </div>
         </header>
@@ -510,7 +510,7 @@ export default function StudioPage() {
             </div>
 
             <div className="providerCard">
-              <div><span className="providerDot"/><div><strong>Generation engine</strong><small>Modal · Wan 2.2 · L40S</small></div></div>
+              <div><span className="providerDot"/><div><strong>Generation engine</strong><small>Kie.ai · Seedance 2.5 · 720p</small></div></div>
               <span className="providerTag">AUTO</span>
             </div>
           </section>
