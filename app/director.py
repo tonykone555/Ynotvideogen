@@ -1,3 +1,4 @@
+from app.config import settings
 from app.models import ContinuityMode, GenerationPlan, GenerationRequest, ProviderName
 from app.workflows.registry import choose_model, resolve_model
 
@@ -22,8 +23,22 @@ def plan_generation(request: GenerationRequest) -> GenerationPlan:
 
     provider = request.provider
     if provider == ProviderName.AUTO:
-        provider = ProviderName.MODAL
-        reasons.append("Modal-hosted ComfyUI is the default open-model benchmark route.")
+        if settings.kie_api_key:
+            provider = ProviderName.KIE
+            reasons.append("Kie is configured; use the managed Seedance route by default.")
+        else:
+            provider = ProviderName.MODAL
+            reasons.append("Kie is not configured; fall back to the Modal open-model route.")
+
+    if provider == ProviderName.KIE:
+        model = request.model or settings.kie_video_model
+        reasons.append(f"Kie model selected: {model}.")
+        return GenerationPlan(
+            continuity_mode=mode,
+            provider=provider,
+            model=model,
+            rationale=reasons,
+        )
 
     model = request.model or choose_model(mode)
     profile = resolve_model(model)
