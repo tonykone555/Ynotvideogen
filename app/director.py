@@ -1,6 +1,6 @@
 from app.config import settings
 from app.models import ContinuityMode, GenerationPlan, GenerationRequest, ProviderName
-from app.workflows.registry import choose_model, resolve_model
+from app.workflows.registry import MODELS, choose_model, resolve_model
 
 
 def plan_generation(request: GenerationRequest) -> GenerationPlan:
@@ -23,7 +23,10 @@ def plan_generation(request: GenerationRequest) -> GenerationPlan:
 
     provider = request.provider
     if provider == ProviderName.AUTO:
-        if settings.kie_api_key:
+        if request.model and request.model in MODELS:
+            provider = ProviderName.MODAL
+            reasons.append("An open-model workflow was explicitly requested; keep it on Modal/ComfyUI.")
+        elif settings.kie_api_key:
             provider = ProviderName.KIE
             reasons.append("Kie is configured; use the managed Seedance route by default.")
         else:
