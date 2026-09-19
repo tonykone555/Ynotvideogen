@@ -10,8 +10,10 @@ from app.benchmarks import BASELINE_MATRIX, build_benchmark_requests
 from app.director import plan_generation
 from app.models import AdRenderJob, AdRequest, GenerationJob, GenerationRequest, ProviderName
 from app.planner import plan_ad
+from app.providers.factory import get_provider
 from app.providers.modal import ModalProvider
 from app.store import ad_jobs, jobs
+from app.stitching import stitch_remote_clips
 from app.storyboard import shot_to_generation
 from app.workflows.compiler import compile_workflow
 from app.workflows.registry import MODELS
@@ -35,10 +37,14 @@ UPLOAD_DIR = Path(os.getenv("YNOT_UPLOAD_DIR", "/tmp/ynot-video-gen/uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
+OUTPUT_DIR = Path(os.getenv("YNOT_OUTPUT_DIR", "/tmp/ynot-video-gen/outputs"))
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
+
 
 @app.post("/v1/uploads")
 async def upload_reference(request: Request, file: UploadFile = File(...)):
-    """Upload a reference image and return an HTTP URL Modal can fetch."""
+    """Upload a reference image and return an HTTP URL the active provider can fetch."""
     content_type = (file.content_type or "").lower()
     allowed = {
         "image/jpeg": ".jpg",
@@ -120,7 +126,8 @@ async def create_ad_plan(request: AdRequest):
 async def generate_ad(request: AdRequest):
     """Plan and asynchronously submit four linked portrait shots to the current provider."""
     ad_job = AdRenderJob(request=request, plan=plan_ad(request), status="queued")
-    provider = ModalProvider()
+    first_generation = shot_to_generation(request, ad_job.plan.shots[0])
+    provider = get_provider(first_generation.plan.provider)
 
     for shot in ad_job.plan.shots:
         generation = shot_to_generation(request, shot)
@@ -154,7 +161,7 @@ async def get_ad(ad_id: UUID):
     if not ad_job:
         raise HTTPException(status_code=404, detail="Ad render job not found")
 
-    provider = ModalProvider()
+    provider = None
     any_failed = False
     all_generated = True
 
@@ -171,7 +178,8 @@ async def get_ad(ad_id: UUID):
 
         if generation.provider_job_id and generation.status not in {"generated", "failed"}:
             try:
-                state = await provider.status(generation.provider_job_id)
+                active_provider = get_provider(generation.plan.provider)
+                state = await active_provider.status(generation.provider_job_id)
                 status = state.get("status")
                 if status == "generated":
                     generation.status = "generated"
@@ -180,7 +188,7 @@ async def get_ad(ad_id: UUID):
                     generation.status = "generating"
                 elif status == "failed":
                     generation.status = "failed"
-                    generation.error = str(state.get("error") or "Modal generation failed")
+                    generation.error = str(state.get("error") or "Provider generation failed")
                 jobs[generation.id] = generation
             except Exception as exc:
                 generation.status = "failed"
@@ -198,21 +206,25 @@ async def get_ad(ad_id: UUID):
     if any_failed:
         ad_job.status = "failed"
     elif all_generated:
-        if ad_job.stitch_provider_job_id:
-            ad_job = await _refresh_ad_stitch(ad_job, provider)
+        assets = _collect_ad_clip_assets(ad_job)
+        if assets and not ad_job.final_asset:
+            try:
+                ad_job.status = "stitching"
+                ad_job.final_asset = await stitch_remote_clips(
+                    str(ad_job.id),
+                    assets,
+                    OUTPUT_DIR,
+                    os.getenv("YNOT_PUBLIC_BASE_URL", ""),
+                )
+                ad_job.status = "generated"
+                ad_job.error = None
+            except Exception as exc:
+                ad_job.status = "failed"
+                ad_job.error = f"Automatic stitch failed: {exc}"
+        elif ad_job.final_asset:
+            ad_job.status = "generated"
         else:
-            assets = _collect_ad_clip_assets(ad_job)
-            if assets:
-                try:
-                    ad_job.stitch_provider_job_id = await provider.submit_stitch(
-                        str(ad_job.id), assets
-                    )
-                    ad_job.status = "stitching"
-                except Exception as exc:
-                    ad_job.status = "failed"
-                    ad_job.error = f"Automatic stitch submission failed: {exc}"
-            else:
-                ad_job.status = "ready_to_stitch"
+            ad_job.status = "ready_to_stitch"
     else:
         ad_job.status = "generating"
 
@@ -222,17 +234,11 @@ async def get_ad(ad_id: UUID):
 
 @app.post("/v1/ads/{ad_id}/stitch", response_model=AdRenderJob)
 async def stitch_ad(ad_id: UUID):
-    """Idempotently start the final 1080x1920 MP4 stitch once all four shots exist."""
+    """Idempotently create the final MP4 once all generated clips are ready."""
     ad_job = ad_jobs.get(ad_id)
     if not ad_job:
         raise HTTPException(status_code=404, detail="Ad render job not found")
-    if ad_job.status == "generated":
-        return ad_job
-
-    provider = ModalProvider()
-    if ad_job.stitch_provider_job_id:
-        ad_job = await _refresh_ad_stitch(ad_job, provider)
-        ad_jobs[ad_job.id] = ad_job
+    if ad_job.status == "generated" and ad_job.final_asset:
         return ad_job
 
     assets = _collect_ad_clip_assets(ad_job)
@@ -243,17 +249,24 @@ async def stitch_ad(ad_id: UUID):
         )
 
     try:
-        ad_job.stitch_provider_job_id = await provider.submit_stitch(str(ad_job.id), assets)
         ad_job.status = "stitching"
+        ad_job.final_asset = await stitch_remote_clips(
+            str(ad_job.id),
+            assets,
+            OUTPUT_DIR,
+            os.getenv("YNOT_PUBLIC_BASE_URL", ""),
+        )
+        ad_job.status = "generated"
         ad_job.error = None
     except Exception as exc:
         ad_job.status = "failed"
-        ad_job.error = f"Stitch submission failed: {exc}"
+        ad_job.error = f"Stitch failed: {exc}"
         ad_jobs[ad_job.id] = ad_job
         raise HTTPException(status_code=502, detail=ad_job.error) from exc
 
     ad_jobs[ad_job.id] = ad_job
     return ad_job
+
 
 @app.get("/v1/benchmarks")
 async def list_benchmarks():
@@ -301,6 +314,19 @@ async def list_models():
 @app.post("/v1/compile")
 async def compile_generation(request: GenerationRequest):
     job = GenerationJob(request=request, plan=plan_generation(request))
+    if job.plan.provider == ProviderName.KIE:
+        return {
+            "plan": job.plan,
+            "model": job.plan.model,
+            "family": "managed",
+            "task": "video",
+            "parameters": {
+                "aspect_ratio": request.aspect_ratio,
+                "duration_seconds": request.duration_seconds,
+            },
+            "workflow": None,
+        }
+
     compiled = compile_workflow(job)
     return {
         "plan": job.plan,
@@ -334,13 +360,10 @@ async def submit_generation(job_id: UUID):
         raise HTTPException(status_code=404, detail="Generation job not found")
     if job.provider_job_id:
         return job
-    if job.plan.provider != ProviderName.MODAL:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Submit endpoint currently supports Modal jobs, got {job.plan.provider}.",
-        )
-
-    provider = ModalProvider()
+    try:
+        provider = get_provider(job.plan.provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         job.provider_job_id = await provider.submit(job)
         job.status = "queued"
@@ -350,7 +373,7 @@ async def submit_generation(job_id: UUID):
         job.status = "failed"
         job.error = str(exc)
         jobs[job.id] = job
-        raise HTTPException(status_code=502, detail=f"Modal submission failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"Provider submission failed: {exc}") from exc
 
 
 @app.post("/v1/generations/{job_id}/refresh", response_model=GenerationJob)
@@ -361,7 +384,7 @@ async def refresh_generation(job_id: UUID):
     if not job.provider_job_id:
         return job
 
-    provider = ModalProvider()
+    provider = get_provider(job.plan.provider)
     try:
         state = await provider.status(job.provider_job_id)
     except Exception as exc:
@@ -378,6 +401,6 @@ async def refresh_generation(job_id: UUID):
         job.status = "generating"
     elif status == "failed":
         job.status = "failed"
-        job.error = str(state.get("error") or "Modal generation failed")
+        job.error = str(state.get("error") or "Provider generation failed")
     jobs[job.id] = job
     return job

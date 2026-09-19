@@ -18,6 +18,7 @@ class ProviderName(StrEnum):
     AUTO = "auto"
     COMFYUI = "comfyui"
     MODAL = "modal"
+    KIE = "kie"
     FAL = "fal"
     GROK = "grok"
 
@@ -76,7 +77,7 @@ class AdRequest(BaseModel):
     angle: str = "aesthetic"
     aspect_ratio: Literal["9:16"] = "9:16"
     shots: int = Field(default=4, ge=4, le=4)
-    shot_duration_seconds: float = Field(default=2.0, ge=1.5, le=4.0)
+    shot_duration_seconds: float = Field(default=5.0, ge=5.0, le=10.0)
     reference_images: list[AdReferenceImage] = Field(min_length=1)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
