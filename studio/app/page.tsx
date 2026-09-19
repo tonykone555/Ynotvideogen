@@ -182,7 +182,6 @@ export default function StudioPage() {
   const [aspectRatio, setAspectRatio] = useState<"9:16"|"16:9"|"1:1">("9:16");
   const [generateAudio, setGenerateAudio] = useState(false);
   const [resolution, setResolution] = useState("auto");
-  const [variantCount, setVariantCount] = useState(1);
   const [productImage, setProductImage] = useState<string | null>(null);
   const [productFile, setProductFile] = useState<File | null>(null);
   const [remoteImageUrl, setRemoteImageUrl] = useState("");
@@ -238,7 +237,7 @@ export default function StudioPage() {
       mode: generationMode,
       model: engine,
       total_duration_seconds: totalDuration,
-      variant_count: variantCount,
+      variant_count: 1,
       generate_audio: generateAudio,
       resolution,
       aspect_ratio: aspectRatio,
@@ -430,12 +429,6 @@ export default function StudioPage() {
                     <option value="1080p">1080p</option>
                     <option value="pro">Kling Pro</option>
                     <option value="4K">Kling 4K</option>
-                  </select>
-                </label>
-                <label className="field">
-                  <span>Variants</span>
-                  <select value={variantCount} onChange={e=>setVariantCount(+e.target.value)}>
-                    {[1,3,5,10,20].map(v=><option value={v} key={v}>{v}</option>)}
                   </select>
                 </label>
               </div>
