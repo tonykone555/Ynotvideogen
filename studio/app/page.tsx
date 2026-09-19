@@ -48,7 +48,7 @@ type AdPlan = {
   platform: string;
   style: string;
   angle: string;
-  aspect_ratio: "9:16";
+  aspect_ratio: "9:16" | "16:9" | "1:1";
   mobile_safe_area: string;
   shots: AdShot[];
 };
@@ -85,6 +85,15 @@ const ANGLES = [
 const TONES = ["Casual", "Aspirational", "Elegant", "Bold", "Playful", "Polished"];
 const CAMERAS = ["Handheld", "Soft push-in", "Macro detail", "Tracking", "Locked-off", "Orbit"];
 const PRESENCE = ["Hands only", "Full person", "No person", "POV", "Environment-led"];
+const VIDEO_ENGINES = [
+  ["auto", "Auto", "YNOT chooses the best model"],
+  ["seedance", "Seedance 2.5", "Natural UGC and general product video"],
+  ["kling", "Kling 3.0", "People, motion and creator-led shots"],
+  ["veo", "Veo 3.1", "Premium cinematic product footage"],
+  ["hailuo", "Hailuo 2.3", "Alternative image-to-video"],
+  ["wan", "Wan 2.6", "Cost-aware product animation"],
+] as const;
+const TOTAL_DURATIONS = [5, 10, 15, 20, 30];
 
 const defaultPlan: AdPlan = {
   concept: "Natural premium mobile-first product ad",
@@ -167,7 +176,13 @@ export default function StudioPage() {
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("Home & Living");
   const [platform, setPlatform] = useState("tiktok");
-  const [duration, setDuration] = useState(5);
+  const [generationMode, setGenerationMode] = useState<"storyboard"|"single_clip">("storyboard");
+  const [engine, setEngine] = useState("auto");
+  const [totalDuration, setTotalDuration] = useState(20);
+  const [aspectRatio, setAspectRatio] = useState<"9:16"|"16:9"|"1:1">("9:16");
+  const [generateAudio, setGenerateAudio] = useState(false);
+  const [resolution, setResolution] = useState("auto");
+  const [variantCount, setVariantCount] = useState(1);
   const [productImage, setProductImage] = useState<string | null>(null);
   const [productFile, setProductFile] = useState<File | null>(null);
   const [remoteImageUrl, setRemoteImageUrl] = useState("");
@@ -220,9 +235,15 @@ export default function StudioPage() {
       platform,
       style: style.toLowerCase(),
       angle: angle.toLowerCase(),
-      aspect_ratio: "9:16",
-      shots: 4,
-      shot_duration_seconds: duration,
+      mode: generationMode,
+      model: engine,
+      total_duration_seconds: totalDuration,
+      variant_count: variantCount,
+      generate_audio: generateAudio,
+      resolution,
+      aspect_ratio: aspectRatio,
+      shots: generationMode === "single_clip" ? 1 : 4,
+      shot_duration_seconds: 5,
       reference_images: [{ url, role: "product", lock_identity: true }],
       metadata: {
         tone: tone.toLowerCase(),
@@ -232,6 +253,8 @@ export default function StudioPage() {
         realism_level: realism,
         polish_level: polish,
         studio_combination: combination,
+        requested_engine: engine,
+        requested_total_duration: totalDuration,
       },
     };
   }
@@ -316,7 +339,7 @@ export default function StudioPage() {
             <h1>Gen Studio <span className="beta">BETA</span></h1>
           </div>
           <div className="topActions">
-            <div className="engineBadge"><span className="pulse"/> SEEDANCE 2.5 <b>KIE READY</b></div>
+            <div className="engineBadge"><span className="pulse"/> {engine === "auto" ? "AUTO MODEL" : VIDEO_ENGINES.find(v=>v[0]===engine)?.[1]} <b>KIE READY</b></div>
             <button className="iconBtn"><Menu size={18}/></button>
           </div>
         </header>
@@ -370,6 +393,66 @@ export default function StudioPage() {
             </div>
 
             <div className="sectionBlock">
+              <div className="sectionTitle"><span>Generation</span><small>Kie multi-model controls</small></div>
+              <div className="fieldGrid">
+                <label className="field">
+                  <span>Mode</span>
+                  <select value={generationMode} onChange={e=>setGenerationMode(e.target.value as "storyboard"|"single_clip")}>
+                    <option value="storyboard">Storyboard ad</option>
+                    <option value="single_clip">Single clip</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Video engine</span>
+                  <select value={engine} onChange={e=>setEngine(e.target.value)}>
+                    {VIDEO_ENGINES.map(([value,label])=><option value={value} key={value}>{label}</option>)}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>{generationMode === "storyboard" ? "Target ad length" : "Clip length"}</span>
+                  <select value={totalDuration} onChange={e=>setTotalDuration(+e.target.value)}>
+                    {TOTAL_DURATIONS.map(v=><option value={v} key={v}>{v} seconds</option>)}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Format</span>
+                  <select value={aspectRatio} onChange={e=>setAspectRatio(e.target.value as "9:16"|"16:9"|"1:1")}>
+                    <option value="9:16">9:16 Vertical</option>
+                    <option value="16:9">16:9 Landscape</option>
+                    <option value="1:1">1:1 Square</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Resolution</span>
+                  <select value={resolution} onChange={e=>setResolution(e.target.value)}>
+                    <option value="auto">Auto</option>
+                    <option value="720p">720p</option>
+                    <option value="1080p">1080p</option>
+                    <option value="pro">Kling Pro</option>
+                    <option value="4K">Kling 4K</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Variants</span>
+                  <select value={variantCount} onChange={e=>setVariantCount(+e.target.value)}>
+                    {[1,3,5,10,20].map(v=><option value={v} key={v}>{v}</option>)}
+                  </select>
+                </label>
+              </div>
+              <div className="toggleRow">
+                <div>
+                  <strong>Generate audio</strong>
+                  <small>Used when the selected Kie model supports native sound.</small>
+                </div>
+                <button type="button" className={"switch "+(generateAudio?"switchOn":"")} onClick={()=>setGenerateAudio(v=>!v)} aria-pressed={generateAudio}><i/></button>
+              </div>
+              <div className="engineHint">
+                <Sparkles size={14}/>
+                <span>{VIDEO_ENGINES.find(v=>v[0]===engine)?.[2]}</span>
+              </div>
+            </div>
+
+            <div className="sectionBlock">
               <div className="sectionTitle"><span>Creative direction</span><small>Choose the base language</small></div>
               <div className="styleCards">
                 {STYLE_OPTIONS.map(([name,desc])=><button key={name} className={"styleCard "+(style===name?"active":"")} onClick={()=>setStyle(name)}>
@@ -406,7 +489,7 @@ export default function StudioPage() {
 
             <div className="actionRow">
               <button className="secondaryBtn" disabled={!!busy} onClick={makePlan}>{busy==="plan"?<LoaderCircle className="spin" size={16}/>:<Clapperboard size={16}/>} Build storyboard</button>
-              <button className="primaryBtn" disabled={!!busy} onClick={generate}>{busy==="generate"?<LoaderCircle className="spin" size={17}/>:<Zap size={17}/>} Generate ad <ArrowUpRight size={15}/></button>
+              <button className="primaryBtn" disabled={!!busy} onClick={generate}>{busy==="generate"?<LoaderCircle className="spin" size={17}/>:<Zap size={17}/>} {generationMode === "single_clip" ? "Generate clip" : "Generate ad"} <ArrowUpRight size={15}/></button>
             </div>
           </section>
 
@@ -420,7 +503,7 @@ export default function StudioPage() {
               <div className="conceptTop"><span>CONCEPT A</span><Lock size={13}/></div>
               <h3>{plan.concept}</h3>
               <p>{plan.mobile_safe_area}</p>
-              <div className="conceptMeta"><span>9:16 PORTRAIT</span><span>4 SHOTS</span><span>{(duration*4).toFixed(0)} SEC</span></div>
+              <div className="conceptMeta"><span>{plan.aspect_ratio}</span><span>{plan.shots.length} {plan.shots.length===1?"SHOT":"SHOTS"}</span><span>{plan.shots.reduce((sum,shot)=>sum+shot.duration_seconds,0).toFixed(0)} SEC PLANNED</span></div>
             </div>
 
             <div className="shotStrip">
@@ -486,7 +569,7 @@ export default function StudioPage() {
             </div>
 
             <div className="queue">
-              <div className="queueHead"><span>SHOT QUEUE</span><small>{plan.shots.filter(s=>s.status==="generated").length}/4 complete</small></div>
+              <div className="queueHead"><span>SHOT QUEUE</span><small>{plan.shots.filter(s=>s.status==="generated").length}/{plan.shots.length} complete</small></div>
               {plan.shots.map((shot,index)=>{
                 const meta=purposeMeta[shot.purpose];
                 return <div className="queueItem" key={shot.id}>
@@ -500,7 +583,7 @@ export default function StudioPage() {
 
             <div className="stitchCard">
               <div className="stitchIcon"><MonitorPlay size={18}/></div>
-              <div><strong>Auto stitch</strong><p>{job?.status==="stitching"?"Normalizing and stitching the four portrait shots…":"Starts automatically after every shot is ready."}</p></div>
+              <div><strong>Auto stitch</strong><p>{job?.status==="stitching"?"Normalizing and stitching the generated shots…":"Starts automatically after every planned shot is ready."}</p></div>
               {job?.status==="stitching"?<LoaderCircle className="spin" size={18}/>:<Check size={16}/>}
             </div>
 
@@ -510,8 +593,8 @@ export default function StudioPage() {
             </div>
 
             <div className="providerCard">
-              <div><span className="providerDot"/><div><strong>Generation engine</strong><small>Kie.ai · Seedance 2.5 · 720p</small></div></div>
-              <span className="providerTag">AUTO</span>
+              <div><span className="providerDot"/><div><strong>Generation engine</strong><small>Kie.ai · {engine === "auto" ? "Auto router" : VIDEO_ENGINES.find(v=>v[0]===engine)?.[1]} · {resolution === "auto" ? "adaptive quality" : resolution}</small></div></div>
+              <span className="providerTag">{engine === "auto" ? "AUTO" : "MANUAL"}</span>
             </div>
           </section>
         </div>
