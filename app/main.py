@@ -44,7 +44,7 @@ app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 
 @app.post("/v1/uploads")
 async def upload_reference(request: Request, file: UploadFile = File(...)):
-    """Upload a reference image and return an HTTP URL Modal can fetch."""
+    """Upload a reference image and return an HTTP URL the active provider can fetch."""
     content_type = (file.content_type or "").lower()
     allowed = {
         "image/jpeg": ".jpg",
@@ -188,7 +188,7 @@ async def get_ad(ad_id: UUID):
                     generation.status = "generating"
                 elif status == "failed":
                     generation.status = "failed"
-                    generation.error = str(state.get("error") or "Modal generation failed")
+                    generation.error = str(state.get("error") or "Provider generation failed")
                 jobs[generation.id] = generation
             except Exception as exc:
                 generation.status = "failed"
@@ -314,6 +314,19 @@ async def list_models():
 @app.post("/v1/compile")
 async def compile_generation(request: GenerationRequest):
     job = GenerationJob(request=request, plan=plan_generation(request))
+    if job.plan.provider == ProviderName.KIE:
+        return {
+            "plan": job.plan,
+            "model": job.plan.model,
+            "family": "managed",
+            "task": "video",
+            "parameters": {
+                "aspect_ratio": request.aspect_ratio,
+                "duration_seconds": request.duration_seconds,
+            },
+            "workflow": None,
+        }
+
     compiled = compile_workflow(job)
     return {
         "plan": job.plan,
