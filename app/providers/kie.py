@@ -46,7 +46,7 @@ class KieProvider(VideoProvider):
                 "reference_video_urls": video_refs[:2],
                 "return_last_frame": False,
                 "generate_audio": requested_audio,
-                "resolution": "720p" if requested_resolution == "auto" else requested_resolution,
+                "resolution": requested_resolution if requested_resolution in profile.resolutions else "720p",
                 "aspect_ratio": aspect,
                 "duration": duration,
             }
@@ -90,7 +90,7 @@ class KieProvider(VideoProvider):
                 "prompt": job.request.prompt,
                 "image_urls": image_refs[:1],
                 "duration": str(5 if duration <= 5 else 10),
-                "resolution": "1080p" if requested_resolution == "auto" else requested_resolution,
+                "resolution": requested_resolution if requested_resolution in profile.resolutions else "1080p",
                 "multi_shots": False,
                 "nsfw_checker": False,
             }
