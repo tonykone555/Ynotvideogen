@@ -1,4 +1,5 @@
 from app.config import settings
+from app.kie_models import choose_auto_model, get_kie_profile
 from app.models import ContinuityMode, GenerationPlan, GenerationRequest, ProviderName
 from app.workflows.registry import MODELS, choose_model, resolve_model
 
@@ -28,18 +29,29 @@ def plan_generation(request: GenerationRequest) -> GenerationPlan:
             reasons.append("An open-model workflow was explicitly requested; keep it on Modal/ComfyUI.")
         elif settings.kie_api_key:
             provider = ProviderName.KIE
-            reasons.append("Kie is configured; use the managed Seedance route by default.")
+            reasons.append("Kie is configured; use the managed multi-model route.")
         else:
             provider = ProviderName.MODAL
             reasons.append("Kie is not configured; fall back to the Modal open-model route.")
 
     if provider == ProviderName.KIE:
-        model = request.model or settings.kie_video_model
-        reasons.append(f"Kie model selected: {model}.")
+        requested = (request.model or "auto").strip()
+        if requested == "auto":
+            profile = choose_auto_model(
+                style=str(request.metadata.get("style", "")),
+                angle=str(request.metadata.get("angle", "")),
+                human_presence=str(request.metadata.get("human_presence", "")),
+                prompt=request.prompt,
+            )
+            reasons.append(f"Auto router selected {profile.label}.")
+        else:
+            profile = get_kie_profile(requested)
+            reasons.append(f"Explicit Kie model selected: {profile.label}.")
+
         return GenerationPlan(
             continuity_mode=mode,
             provider=provider,
-            model=model,
+            model=profile.model_id,
             rationale=reasons,
         )
 

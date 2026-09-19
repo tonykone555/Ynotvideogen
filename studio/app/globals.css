@@ -231,3 +231,22 @@ body{overflow-x:hidden}
   .matrixFlow{gap:4px}
   .device{width:58%;max-width:230px}
 }
+
+.toggleRow{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--line);background:rgba(255,255,255,.018);border-radius:11px;padding:10px 11px;margin-top:10px}
+.toggleRow>div{display:grid;gap:3px}
+.toggleRow strong{font-size:9px;color:#b8bec8}
+.toggleRow small{font-size:8px;color:#606774}
+.switch{width:36px;height:20px;border-radius:999px;border:1px solid var(--line2);background:rgba(255,255,255,.04);padding:2px;cursor:pointer;transition:.18s}
+.switch i{display:block;width:14px;height:14px;border-radius:999px;background:#737986;transition:.18s}
+.switchOn{background:rgba(139,217,175,.15);border-color:rgba(139,217,175,.25)}
+.switchOn i{transform:translateX(16px);background:#9ee1bd}
+.engineHint{display:flex;align-items:center;gap:7px;margin-top:8px;padding:8px 9px;border-radius:9px;background:rgba(122,111,255,.055);border:1px solid rgba(139,128,255,.1);color:#797f8b;font-size:8px}
+.engineHint svg{color:#a79eff}
+
+.creatorUpload{position:relative;display:block;min-height:86px;border:1px dashed rgba(255,255,255,.12);border-radius:12px;overflow:hidden;background:rgba(255,255,255,.016);cursor:pointer}
+.creatorUpload input{display:none}
+.creatorUpload img{width:100%;height:110px;display:block;object-fit:cover}
+.creatorEmpty{min-height:86px;display:flex;align-items:center;gap:10px;padding:12px;color:#777f8c}
+.creatorEmpty>div{display:grid;gap:3px}
+.creatorEmpty strong{font-size:10px;color:#aeb4bd}
+.creatorEmpty small{font-size:8px;color:#5f6671}

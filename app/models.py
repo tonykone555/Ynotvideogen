@@ -75,9 +75,19 @@ class AdRequest(BaseModel):
     platform: str = "tiktok"
     style: str = "natural premium"
     angle: str = "aesthetic"
-    aspect_ratio: Literal["9:16"] = "9:16"
-    shots: int = Field(default=4, ge=4, le=4)
-    shot_duration_seconds: float = Field(default=5.0, ge=5.0, le=10.0)
+
+    mode: Literal["storyboard", "single_clip"] = "storyboard"
+    model: str = "auto"
+    total_duration_seconds: int = Field(default=20, ge=5, le=60)
+    variant_count: int = Field(default=1, ge=1, le=20)
+    generate_audio: bool = False
+    resolution: str = "auto"
+    aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
+
+    # Kept for backwards compatibility with the existing Studio payload.
+    shots: int = Field(default=4, ge=1, le=12)
+    shot_duration_seconds: float = Field(default=5.0, ge=3.0, le=15.0)
+
     reference_images: list[AdReferenceImage] = Field(min_length=1)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -102,7 +112,7 @@ class AdPlan(BaseModel):
     platform: str
     style: str
     angle: str
-    aspect_ratio: Literal["9:16"] = "9:16"
+    aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
     mobile_safe_area: str = "Keep product/action in center 70%; reserve upper/lower edges for UI/text."
     shots: list[AdShot]
 

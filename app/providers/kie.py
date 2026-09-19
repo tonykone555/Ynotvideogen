@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import json
-import math
 
 import httpx
 
 from app.config import settings
+from app.kie_models import get_kie_profile, normalize_clip_duration
 from app.models import GenerationJob
 from app.providers.base import VideoProvider
 
 
 class KieProvider(VideoProvider):
-    """Kie.ai Market provider for Seedance/Kling/Veo-style async jobs."""
+    """Kie.ai Market provider with model-specific request adapters."""
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None):
         self.api_key = (api_key or settings.kie_api_key).strip()
@@ -26,32 +26,85 @@ class KieProvider(VideoProvider):
             "Content-Type": "application/json",
         }
 
-    async def submit(self, job: GenerationJob) -> str:
+    def _build_input(self, job: GenerationJob) -> dict:
+        profile = get_kie_profile(job.plan.model)
         image_refs = [
-            ref.url for ref in job.request.references
+            ref.url
+            for ref in job.request.references
             if ref.role in {"product", "character", "environment", "style"}
         ]
         video_refs = [ref.url for ref in job.request.references if ref.role == "video"]
+        requested_audio = bool(job.request.metadata.get("generate_audio", False))
+        requested_resolution = str(job.request.metadata.get("resolution", "auto"))
+        duration = normalize_clip_duration(profile, job.request.duration_seconds)
+        aspect = job.request.aspect_ratio
 
-        duration = max(5, min(30, math.ceil(job.request.duration_seconds)))
-        model = job.plan.model or settings.kie_video_model
+        if profile.family == "seedance":
+            payload = {
+                "prompt": job.request.prompt,
+                "reference_image_urls": image_refs[:4],
+                "reference_video_urls": video_refs[:2],
+                "return_last_frame": False,
+                "generate_audio": requested_audio,
+                "resolution": requested_resolution if requested_resolution in profile.resolutions else "720p",
+                "aspect_ratio": aspect,
+                "duration": duration,
+            }
 
-        input_payload: dict = {
-            "prompt": job.request.prompt,
-            "reference_image_urls": image_refs[:4],
-            "reference_video_urls": video_refs[:2],
-            "return_last_frame": False,
-            "generate_audio": bool(job.request.metadata.get("generate_audio", False)),
-            "resolution": str(job.request.metadata.get("resolution", settings.kie_video_resolution)),
-            "aspect_ratio": job.request.aspect_ratio,
-            "duration": duration,
+        elif profile.family == "kling":
+            mode = requested_resolution if requested_resolution in {"std", "pro", "4K"} else "pro"
+            payload = {
+                "prompt": job.request.prompt,
+                "image_urls": image_refs[:2],
+                "sound": requested_audio,
+                "duration": str(duration),
+                "aspect_ratio": aspect,
+                "mode": mode,
+                "multi_shots": False,
+            }
+
+        elif profile.family == "veo":
+            payload = {
+                "prompt": job.request.prompt,
+                "image_urls": image_refs[:3],
+                "aspect_ratio": aspect if aspect in {"9:16", "16:9"} else "9:16",
+                "enable_fallback": True,
+                "enable_translation": True,
+                "generation_type": "REFERENCE_2_VIDEO" if image_refs else "TEXT_2_VIDEO",
+            }
+
+        elif profile.family == "hailuo":
+            if not image_refs:
+                raise ValueError("Hailuo image-to-video requires a reference image.")
+            payload = {
+                "prompt": job.request.prompt,
+                "image_url": image_refs[0],
+                "duration": "6" if duration <= 6 else "10",
+                "resolution": "768P",
+            }
+
+        elif profile.family == "wan":
+            if not image_refs:
+                raise ValueError("Wan image-to-video requires a reference image.")
+            payload = {
+                "prompt": job.request.prompt,
+                "image_urls": image_refs[:1],
+                "duration": str(5 if duration <= 5 else 10),
+                "resolution": requested_resolution if requested_resolution in profile.resolutions else "1080p",
+                "multi_shots": False,
+                "nsfw_checker": False,
+            }
+
+        else:
+            raise ValueError(f"Unsupported Kie model family: {profile.family}")
+
+        return {key: value for key, value in payload.items() if value not in (None, [], "")}
+
+    async def submit(self, job: GenerationJob) -> str:
+        payload: dict = {
+            "model": job.plan.model,
+            "input": self._build_input(job),
         }
-        input_payload = {
-            key: value for key, value in input_payload.items()
-            if value not in (None, [], "")
-        }
-
-        payload: dict = {"model": model, "input": input_payload}
         callback_url = settings.kie_callback_url.strip()
         if callback_url:
             payload["callBackUrl"] = callback_url

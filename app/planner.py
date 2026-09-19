@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import math
+
+from app.kie_models import choose_auto_model, get_kie_profile, normalize_clip_duration
 from app.models import AdPlan, AdRequest, AdShot
 
 
@@ -15,83 +18,112 @@ def _product_context(request: AdRequest) -> str:
     return f"{request.product_title}. {desc}".strip()
 
 
+def _profile_for_request(request: AdRequest):
+    if request.model != "auto":
+        return get_kie_profile(request.model)
+    return choose_auto_model(
+        style=request.style,
+        angle=request.angle,
+        human_presence=str(request.metadata.get("human_presence", "")),
+        prompt=request.product_description,
+    )
+
+
+def _shot_purpose(index: int, count: int) -> str:
+    if count == 1:
+        return "hero"
+    if index == 0:
+        return "hook"
+    if index == count - 1:
+        return "cta"
+    if index == 1:
+        return "hero"
+    return "benefit"
+
+
+def _shot_copy(purpose: str, product: str, style: str, angle: str, aspect: str) -> tuple[str, str, str]:
+    if purpose == "hook":
+        return (
+            "handheld phone-like micro movement, close framing, immediate visual action",
+            "Keep the same creator, product identity, clothing, materials, colour and lighting language across later shots.",
+            (
+                f"{aspect} social ad hook for {product}. Style: {style}. Angle: {angle}. "
+                "Open on a believable moment already in progress. Make the product readable immediately. "
+                "Use realistic creator timing, subtle camera imperfection and one clear action. No baked-in text."
+            ),
+        )
+    if purpose == "hero":
+        return (
+            "natural push-in or side drift, product-led framing",
+            "Preserve exact creator identity and exact product shape, colour, materials and logo placement.",
+            (
+                f"{aspect} product hero shot for {product}. Style: {style}. "
+                "Keep the same creator/world. Show one tactile or visually satisfying detail without becoming a catalogue spin."
+            ),
+        )
+    if purpose == "cta":
+        return (
+            "settled premium framing with subtle living motion",
+            "Finish with the same creator, product and visual world.",
+            (
+                f"{aspect} closing shot for {product}. Style: {style}. "
+                "End on a natural final beat, keep the product clear, and leave clean negative space for CTA text added later."
+            ),
+        )
+    return (
+        "observational lifestyle angle, medium close-up, natural subject movement",
+        "Carry forward the same creator identity, product and environment.",
+        (
+            f"{aspect} lifestyle benefit shot for {product}. Angle: {angle}. "
+            "Show why someone wants the product through a believable action or consequence. Avoid forced posing and fake reactions."
+        ),
+    )
+
+
 def plan_ad(request: AdRequest) -> AdPlan:
     product = _product_context(request)
     style = request.style.strip() or "natural premium"
     angle = request.angle.strip() or "aesthetic"
+    profile = _profile_for_request(request)
 
-    # Mobile-first: all four shots are composed for a phone screen, with realistic
-    # human-scale motion and hooks that feel observed rather than staged.
-    shots = [
-        AdShot(
-            id="shot_1",
-            purpose="hook",
-            duration_seconds=request.shot_duration_seconds,
-            camera_style="handheld phone-like micro movement, close framing, immediate visual action",
-            continuity_note="Same product identity, materials, colour, environment logic and lighting language as later shots.",
-            negative_prompt=NEGATIVE,
-            prompt=(
-                f"9:16 portrait social ad hook for {product} "
-                f"Style: {style}. Angle: {angle}. "
-                "Open on a believable moment already in progress, not a posed reveal. "
-                "Show one visually interesting action in the first half-second: a hand entering frame, "
-                "the product being used, placed, opened, worn, adjusted, sat on, switched on, or naturally interacted with "
-                "depending on the product. Keep the camera close enough that the product reads instantly on a phone. "
-                "Use subtle handheld movement and imperfect real-world timing so it feels creator-shot, not like stock footage. "
-                "No text baked into the video. Keep important action inside the center 70 percent of the portrait frame."
-            ),
-        ),
-        AdShot(
-            id="shot_2",
-            purpose="hero",
-            duration_seconds=request.shot_duration_seconds,
-            camera_style="slow natural push-in or side drift, product-led framing",
-            continuity_note="Preserve exact product shape, colour, logo placement and scene identity from the hook.",
-            negative_prompt=NEGATIVE,
-            prompt=(
-                f"9:16 portrait hero shot for {product} "
-                f"Style: {style}. Keep the same world and product identity as shot 1. "
-                "Let the product become clearly readable without turning into a catalogue spin. "
-                "Use a natural camera push or small side movement, realistic light falloff, and one tactile detail "
-                "that makes the product feel desirable. Composition must read clearly on a mobile screen."
-            ),
-        ),
-        AdShot(
-            id="shot_3",
-            purpose="benefit",
-            duration_seconds=request.shot_duration_seconds,
-            camera_style="observational lifestyle angle, medium close-up, natural subject movement",
-            continuity_note="Carry over the same product and visual world; show use, comfort, result or payoff rather than a new unrelated scene.",
-            negative_prompt=NEGATIVE,
-            prompt=(
-                f"9:16 portrait lifestyle benefit shot for {product} "
-                f"Angle: {angle}. Show the reason someone would want it through a natural action or consequence, "
-                "not a literal demonstration pose. The scene should feel caught in real life: relaxed movement, believable pacing, "
-                "small environmental details, and no forced smiling at camera. Keep the product clearly identifiable and central enough for mobile."
-            ),
-        ),
-        AdShot(
-            id="shot_4",
-            purpose="cta",
-            duration_seconds=request.shot_duration_seconds,
-            camera_style="settled premium framing with subtle motion and clean negative space",
-            continuity_note="Finish in the same visual language and preserve exact product identity.",
-            negative_prompt=NEGATIVE,
-            prompt=(
-                f"9:16 portrait closing shot for {product} "
-                f"Style: {style}. End with a satisfying natural final moment rather than a hard sales pose. "
-                "Hold the product clearly for the last beat with subtle motion still alive in frame. "
-                "Leave clean visual space in the upper or lower third for YNOT to add CTA text later. "
-                "Do not render text or logos that are not already part of the product."
-            ),
-        ),
-    ]
+    if request.mode == "single_clip":
+        shot_count = 1
+        shot_seconds = normalize_clip_duration(profile, request.total_duration_seconds)
+    else:
+        base = profile.default_clip_seconds
+        shot_count = max(2, min(8, math.ceil(request.total_duration_seconds / base)))
+        shot_seconds = base
+
+    shots: list[AdShot] = []
+    for index in range(shot_count):
+        purpose = _shot_purpose(index, shot_count)
+        camera, continuity, prompt = _shot_copy(
+            purpose,
+            product,
+            style,
+            angle,
+            request.aspect_ratio,
+        )
+        shots.append(
+            AdShot(
+                id=f"shot_{index + 1}",
+                purpose=purpose,
+                duration_seconds=shot_seconds,
+                camera_style=camera,
+                continuity_note=continuity,
+                negative_prompt=NEGATIVE,
+                prompt=prompt,
+            )
+        )
+
+    model_label = profile.label if request.model != "auto" else f"Auto → {profile.label}"
+    mode_label = "single clip" if request.mode == "single_clip" else "storyboard"
 
     return AdPlan(
-        concept=f"{style} mobile-first {angle} ad for {request.product_title}",
+        concept=f"{style} {mode_label} · {model_label} · {angle} · {request.product_title}",
         platform=request.platform,
         style=style,
         angle=angle,
-        aspect_ratio="9:16",
+        aspect_ratio=request.aspect_ratio,
         shots=shots,
     )
