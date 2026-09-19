@@ -9,5 +9,11 @@ class Settings(BaseSettings):
     fal_key: str = ""
     xai_api_key: str = ""
 
+    kie_api_key: str = ""
+    kie_api_base_url: str = "https://api.kie.ai"
+    kie_video_model: str = "bytedance/seedance-2-5"
+    kie_video_resolution: str = "720p"
+    kie_callback_url: str = ""
+
 
 settings = Settings()
